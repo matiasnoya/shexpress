@@ -25,6 +25,14 @@ docker compose start catalogo-service >/dev/null 2>&1; esperar_up "$CA"
 echo "   stock=$(stock "$P") (sin cambios)"
 
 echo; echo "== B) Catalogo congelado"
+# Calienta la conexion keep-alive pedidos->catalogo (pedido rechazado por stock, no altera nada):
+# asi la peticion llega al catalogo congelado y el resultado es realmente "desconocido".
+# (tras reiniciar el catalogo la primera llamada puede usar una conexion vieja y fallar: se reintenta)
+for w in 1 2 3 4 5; do
+  C=$(curl -s -X POST "$PE/api/pedidos" -H "$J" -H "Idempotency-Key: rw$w-$S" \
+    -d "{\"usuario_id\":\"$USR\",\"items\":[{\"producto_id\":\"$P\",\"cantidad\":99}],\"pago\":{\"metodo\":\"TARJETA_CREDITO\"}}" | campo codigo_rechazo)
+  [ "$C" == "SIN_STOCK" ] && break
+done
 docker compose pause catalogo-service >/dev/null 2>&1
 R=$(curl -s -X POST "$PE/api/pedidos" -H "$J" -H "Idempotency-Key: rb-$S" -d "$BODY"); ORD=$(echo "$R" | campo pedido_id)
 echo "   pedido=$ORD saga=$(echo "$R" | saga) $(echo "$R" | grep -o '"compensaciones_pendientes":\[[^]]*\]')"
