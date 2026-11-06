@@ -606,7 +606,7 @@ a{color:var(--cyan)}
 </section>
 
 <div id="notes"></div>
-<div id="footer"><span id="ftitle">ShopExpress</span><span class="keys"><span>←</span><span>→</span> navegar · <span>N</span> notas · <span>F</span> pantalla completa · <span>R</span> reiniciar animación</span><span id="fcount"></span></div>
+<div id="footer"><span id="ftitle">ShopExpress</span><span class="keys"><span>←</span><span>→</span> navegar · <span>N</span> notas · <span>F</span> pantalla completa · <span>R</span> reiniciar animación · <span>+</span><span>−</span> <b id="fvel" style="font-weight:600"></b></span><span id="fcount"></span></div>
 <div id="progress"></div>
 </div>
 
@@ -641,12 +641,17 @@ addEventListener('keydown', e=>{
   else if (k==='n'||k==='N') notesEl.classList.toggle('on');
   else if (k==='f'||k==='F') { document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); }
   else if (k==='r'||k==='R') (onEnter[cur]||(()=>{}))(true);
+  else if (k==='+'||k==='=') { VEL = Math.max(0.5, +(VEL-0.25).toFixed(2)); velTxt(); }
+  else if (k==='-'||k==='_') { VEL = Math.min(4, +(VEL+0.25).toFixed(2)); velTxt(); }
 });
 stage.addEventListener('click', e=>{ if (e.target===stage) go(cur+1); });
 
 /* ============================ Utilidades de animación ============================ */
 const NS='http://www.w3.org/2000/svg';
 const ABORT = Symbol('abort');
+/* Lentitud de las animaciones: multiplica todas las duraciones (2 = el doble de lento). Teclas + / - */
+let VEL = 2;
+function velTxt(){ document.getElementById('fvel').textContent = 'velocidad ' + Math.round(100/VEL) + '%'; }
 const C = { req:'#0284c7', ok:'#059669', err:'#e11d48', comp:'#d97706', usu:'#7c3aed', cat:'#0284c7', ped:'#db2777', mongo:'#0d9488', redis:'#ea580c', pago:'#ca8a04', muted:'#56627d' };
 function el(tag, attrs={}, parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent) parent.appendChild(e); return e; }
 class Runner{ constructor(){ this.id=0; } start(){ this.id++; return new Ctl(this); } stop(){ this.id++; } }
@@ -654,7 +659,7 @@ class Ctl{
   constructor(r){ this.r=r; this.id=r.id; }
   get dead(){ return this.id!==this.r.id; }
   check(){ if(this.dead) throw ABORT; }
-  sleep(ms){ return new Promise((res,rej)=>setTimeout(()=> this.dead?rej(ABORT):res(), ms)); }
+  sleep(ms){ return new Promise((res,rej)=>setTimeout(()=> this.dead?rej(ABORT):res(), ms*VEL)); }
   /* mueve un punto entre dos nodos de un "board" */
   move(board, from, to, o={}){
     const a = board.nodes[from], b = board.nodes[to];
@@ -665,7 +670,7 @@ class Ctl{
     const c = el('circle',{r, fill:color, style:`filter:drop-shadow(0 0 8px ${color})`},g);
     let t=null;
     if(label){ t = el('text',{class:'dotlabel','text-anchor':'middle',fill:color},g); t.textContent=label; }
-    const t0 = performance.now();
+    const t0 = performance.now(); dur *= VEL;
     return new Promise((res,rej)=>{
       const step = now=>{
         if(this.dead){ g.remove(); return rej(ABORT); }
@@ -1082,9 +1087,9 @@ document.getElementById('seudoBtn').onclick=async ()=>{
   document.getElementById('seudoBtn').textContent = seudoOn ? '↺ Ver original' : '▶ Seudonimizar';
   for(const v of vs){
     if(!v.dataset.from) v.dataset.from=v.textContent;
-    v.classList.add('swap'); await new Promise(r=>setTimeout(r,180));
+    v.classList.add('swap'); await new Promise(r=>setTimeout(r,180*VEL));
     v.textContent = seudoOn ? v.dataset.to : v.dataset.from; v.style.color = seudoOn ? 'var(--ok)' : '';
-    v.classList.remove('swap'); await new Promise(r=>setTimeout(r,120));
+    v.classList.remove('swap'); await new Promise(r=>setTimeout(r,120*VEL));
   }
 };
 
@@ -1130,6 +1135,7 @@ onEnter[idx('Chain of Responsibility')] = (replay)=>{ corR.stop(); buildChain();
 onEnter[idx('Fallas de red')] = ()=>{ tlR.stop(); document.querySelectorAll('#tl .st').forEach(s=>s.classList.remove('on')); };
 onEnter[idx('Despliegue')] = (replay)=>{ dkR.stop(); buildDock(); if(replay) dockRun(); };
 
+velTxt();
 go(Math.max(0, (parseInt(location.hash.slice(1))||1)-1));
 </script>
 </body>
