@@ -1,5 +1,7 @@
 package com.shopexpress.usuarios.web;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.shopexpress.usuarios.dto.Dtos.CrearUsuarioRequest;
 import com.shopexpress.usuarios.dto.Dtos.RegistrarCompraRequest;
 import com.shopexpress.usuarios.dto.Dtos.UsuarioExportado;
@@ -27,6 +29,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@Tag(name = "Usuarios", description = "Perfiles de clientes")
 @RequestMapping("/api/usuarios")
 public class UsuarioController {
 
@@ -38,6 +41,7 @@ public class UsuarioController {
         this.seudonimizador = seudonimizador;
     }
 
+    @Operation(summary = "Crea un usuario", description = "201 creado, 409 si el email o documento ya existen, 400 con detalle por campo.")
     @PostMapping
     public ResponseEntity<Usuario> crear(@Valid @RequestBody CrearUsuarioRequest req) {
         Usuario u = servicio.crear(req);
@@ -45,6 +49,7 @@ public class UsuarioController {
     }
 
     /** Opcional del enunciado: exportacion con datos seudonimizados en JSON o CSV. */
+    @Operation(summary = "Exporta usuarios seudonimizados (JSON o CSV)", description = "Opcional del enunciado: ids/email con HMAC-SHA256, documento enmascarado, nombre en iniciales.")
     @GetMapping("/exportar")
     public ResponseEntity<?> exportar(@RequestParam(defaultValue = "json") String formato) {
         List<UsuarioExportado> filas;
@@ -61,6 +66,7 @@ public class UsuarioController {
         };
     }
 
+    @Operation(summary = "Obtiene un usuario", description = "Lectura AP: Redis (cache-aside, TTL 60s) y luego secundario de MongoDB.")
     @GetMapping("/{id}")
     public Usuario obtener(@PathVariable String id) {
         return servicio.obtener(id);
@@ -68,12 +74,14 @@ public class UsuarioController {
 
     // ---------- Endpoints internos (SAGA de Pedidos) ----------
 
+    @Operation(summary = "[Interno SAGA] Agrega un pedido al historial", description = "Idempotente: si el pedido ya esta no se duplica.")
     @PostMapping("/{id}/historial")
     public ResponseEntity<Void> registrarCompra(@PathVariable String id, @Valid @RequestBody RegistrarCompraRequest req) {
         servicio.registrarCompra(id, req);
         return ResponseEntity.noContent().build();
     }
 
+    @Operation(summary = "[Interno SAGA] Compensacion: quita un pedido del historial", description = "Idempotente.")
     @DeleteMapping("/{id}/historial/{pedidoId}")
     public ResponseEntity<Void> quitarCompra(@PathVariable String id, @PathVariable String pedidoId) {
         servicio.quitarCompra(id, pedidoId);

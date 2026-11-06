@@ -1,0 +1,1626 @@
+{
+  "info": {
+    "name": "ShopExpress - Microservicios NoSQL",
+    "description": "Pruebas de los 3 microservicios (Usuarios, Catalogo e Inventario, Pedidos y Pagos).\n\nRequisito: `docker compose up -d --build`. Ejecutar la coleccion completa con el Runner (o `newman run`): las carpetas dependen de las variables que crea \"0. Preparacion\".\n\nLa concurrencia (sin sobreventa) se prueba con scripts/prueba-concurrencia.sh y scripts/prueba-saga.sh, porque el Runner ejecuta las peticiones de a una.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "0. Preparacion",
+      "description": "Crea los datos que usan las demas carpetas. Ejecutar la coleccion completa en orden (Runner).",
+      "item": [
+        {
+          "name": "Crear usuario",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipo_documento\": \"DNI\",\n  \"nro_documento\": \"{{sufijo}}\",\n  \"nombre\": \"Juan\",\n  \"apellido\": \"Pérez\",\n  \"email\": \"juan.{{sufijo}}@example.com\",\n  \"direcciones\": [\n    {\n      \"calle\": \"Av. Principal 123\",\n      \"ciudad\": \"Montevideo\",\n      \"codigo_postal\": \"11000\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('sufijo', Date.now().toString());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 creado', () => pm.response.to.have.status(201));",
+                  "const u = pm.response.json();",
+                  "pm.test('id generado por el servidor', () => pm.expect(u.id).to.match(/^usr_/));",
+                  "pm.test('Location', () => pm.response.to.have.header('Location'));",
+                  "pm.collectionVariables.set('usuario_id', u.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear producto A (stock 10, $25.50)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Auriculares Bluetooth\",\n  \"descripcion\": \"BT 5.3, cancelacion de ruido\",\n  \"categoria\": \"Electrónica\",\n  \"precio\": 25.5,\n  \"stock\": 10\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 creado', () => pm.response.to.have.status(201));",
+                  "const p = pm.response.json();",
+                  "pm.test('categoria embebida con slug', () => pm.expect(p.categoria).to.eql({ slug: 'electronica', nombre: 'Electrónica' }));",
+                  "pm.collectionVariables.set('producto_a', p.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Crear producto B (stock 3, $9000)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"Notebook Pro\",\n  \"categoria\": \"Electrónica\",\n  \"precio\": 9000,\n  \"stock\": 3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 creado', () => pm.response.to.have.status(201));",
+                  "pm.collectionVariables.set('producto_b', pm.response.json().id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "1. Servicio de Usuarios",
+      "description": "Lecturas AP: Redis (cache-aside) -> secundario de MongoDB.",
+      "item": [
+        {
+          "name": "GET usuario",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/{{usuario_id}}",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "{{usuario_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const u = pm.response.json();",
+                  "pm.test('direcciones embebidas', () => pm.expect(u.direcciones[0].ciudad).to.eql('Montevideo'));",
+                  "pm.test('historial vacio', () => pm.expect(u.historial_compras).to.eql([]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST usuario duplicado -> 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipo_documento\": \"DNI\",\n  \"nro_documento\": \"{{sufijo}}\",\n  \"nombre\": \"Otro\",\n  \"apellido\": \"Usuario\",\n  \"email\": \"juan.{{sufijo}}@example.com\",\n  \"direcciones\": [\n    {\n      \"calle\": \"x\",\n      \"ciudad\": \"y\",\n      \"codigo_postal\": \"1\"\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 conflicto', () => pm.response.to.have.status(409));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST usuario invalido -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tipo_documento\": \"XX\",\n  \"email\": \"no-es-email\",\n  \"direcciones\": []\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "const e = pm.response.json().errores;",
+                  "pm.test('detalle por campo', () => pm.expect(e).to.have.keys('tipo_documento', 'nro_documento', 'nombre', 'apellido', 'email', 'direcciones'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET usuario inexistente -> 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/usr_noexiste",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "usr_noexiste"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET exportar JSON (seudonimizado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/exportar?formato=json",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "exportar"
+              ],
+              "query": [
+                {
+                  "key": "formato",
+                  "value": "json"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "const filas = pm.response.json();",
+                  "pm.test('sin datos personales', () => filas.forEach(f => {",
+                  "  pm.expect(f).to.not.have.any.keys('email', 'nombre', 'apellido', 'nro_documento', 'id');",
+                  "  pm.expect(f.usuario_ref).to.match(/^anon_/);",
+                  "  pm.expect(f.email_hash).to.match(/^[0-9a-f]{64}$/);",
+                  "}));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET exportar CSV",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/exportar?formato=csv",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "exportar"
+              ],
+              "query": [
+                {
+                  "key": "formato",
+                  "value": "csv"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 text/csv', () => { pm.response.to.have.status(200); pm.expect(pm.response.headers.get('Content-Type')).to.include('text/csv'); });",
+                  "pm.test('cabecera', () => pm.expect(pm.response.text().split('\\n')[0]).to.eql('usuario_ref,email_hash,documento_enmascarado,iniciales,ciudad,codigo_postal,cantidad_compras,total_comprado'));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "2. Servicio de Catalogo",
+      "description": "Lectura rapida del producto y su stock (consistencia eventual).",
+      "item": [
+        {
+          "name": "GET producto A",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_a}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_a}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 10', () => pm.expect(pm.response.json().stock).to.eql(10));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST producto invalido -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nombre\": \"\",\n  \"precio\": -1,\n  \"stock\": -3\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));",
+                  "pm.test('detalle por campo', () => pm.expect(pm.response.json().errores).to.have.keys('nombre', 'categoria', 'precio', 'stock'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto inexistente -> 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/prod_noexiste",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "prod_noexiste"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Inventario (endpoints internos de la SAGA)",
+      "description": "Reserva atomica de stock (sin sobreventa) e idempotente por pedido_id. Los usa el orquestador de Pedidos.",
+      "item": [
+        {
+          "name": "Reservar 1 x A",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/inventario/reservas",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "inventario",
+                "reservas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pedido_id\": \"ord_manual_{{sufijo}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201', () => pm.response.to.have.status(201));",
+                  "const r = pm.response.json();",
+                  "pm.test('reserva ACTIVA con precio del catalogo', () => { pm.expect(r.estado).to.eql('ACTIVA'); pm.expect(r.items[0].precio_unitario).to.eql(25.5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reservar de nuevo (idempotente) -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/inventario/reservas",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "inventario",
+                "reservas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pedido_id\": \"ord_manual_{{sufijo}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 (ya existia, no descuenta otra vez)', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto A -> stock 9",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_a}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_a}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 9', () => pm.expect(pm.response.json().stock).to.eql(9));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reservar 5 x B (hay 3) -> 409",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{catalogo_url}}/api/inventario/reservas",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "inventario",
+                "reservas"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"pedido_id\": \"ord_manual2_{{sufijo}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_b}}\",\n      \"cantidad\": 5\n    }\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('409 stock insuficiente', () => pm.response.to.have.status(409));",
+                  "const e = pm.response.json();",
+                  "pm.test('informa disponible', () => { pm.expect(e.disponible).to.eql(3); pm.expect(e.solicitado).to.eql(5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Liberar reserva (compensacion)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/inventario/reservas/ord_manual_{{sufijo}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "inventario",
+                "reservas",
+                "ord_manual_{{sufijo}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Liberar de nuevo (idempotente)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/inventario/reservas/ord_manual_{{sufijo}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "inventario",
+                "reservas",
+                "ord_manual_{{sufijo}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('204 sin efecto', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto A -> stock 10",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_a}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_a}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 10', () => pm.expect(pm.response.json().stock).to.eql(10));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Pedidos y Pagos - SAGA + Chain of Responsibility",
+      "description": "POST /api/pedidos inicia la SAGA orquestada. Cada respuesta incluye saga.pasos con acciones y compensaciones.",
+      "item": [
+        {
+          "name": "Pedido exitoso (2 x A)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_exito}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 2\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_exito', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('201 creado', () => pm.response.to.have.status(201));",
+                  "const p = pm.response.json();",
+                  "pm.test('CONFIRMADO', () => pm.expect(p.estado).to.eql('CONFIRMADO'));",
+                  "pm.test('total calculado por el servidor = 51.00', () => pm.expect(p.total).to.eql(51.0));",
+                  "pm.test('pago APROBADO con transaccion', () => { pm.expect(p.pago.estado_pago).to.eql('APROBADO'); pm.expect(p.pago.transaccion_id).to.match(/^tx_/); });",
+                  "const pasos = pm.response.json().saga.pasos.map(s => s.paso + ':' + s.tipo + ':' + s.resultado);",
+                  "pm.test('cadena completa en orden', () => pm.expect(pasos).to.eql([",
+                  "  'CREAR_PEDIDO:ACCION:OK', 'VALIDAR_DATOS:ACCION:OK', 'VALIDAR_USUARIO:ACCION:OK', 'RESERVAR_STOCK:ACCION:OK',",
+                  "  'CALCULAR_TOTAL:ACCION:OK', 'PROCESAR_PAGO:ACCION:OK', 'REGISTRAR_HISTORIAL:ACCION:OK', 'CONFIRMAR_PEDIDO:ACCION:OK']));",
+                  "pm.test('saga COMPLETADA', () => pm.expect(p.saga.estado).to.eql('COMPLETADA'));",
+                  "pm.collectionVariables.set('pedido_exito', p.pedido_id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Reintento con la misma Idempotency-Key -> 200",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_exito}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 2\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200 (no se crea otro pedido)', () => pm.response.to.have.status(200));",
+                  "pm.test('header Idempotent-Replay', () => pm.expect(pm.response.headers.get('Idempotent-Replay')).to.eql('true'));",
+                  "pm.test('mismo pedido', () => pm.expect(pm.response.json().pedido_id).to.eql(pm.collectionVariables.get('pedido_exito')));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET pedido (log de la SAGA persistido)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos/{{pedido_exito}}",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos",
+                "{{pedido_exito}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('8 pasos persistidos', () => pm.expect(pm.response.json().saga.pasos).to.have.length(8));",
+                  "pm.test('items embebidos con snapshot de precio', () => pm.expect(pm.response.json().items[0]).to.include({ cantidad: 2, precio_unitario: 25.5, subtotal: 51.0 }));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto A -> stock 8 (una sola reserva)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_a}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_a}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 8', () => pm.expect(pm.response.json().stock).to.eql(8));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET usuario -> historial con el pedido",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/{{usuario_id}}",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "{{usuario_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('historial referencia el pedido', () => pm.expect(pm.response.json().historial_compras.map(h => h.pedido_id)).to.eql([pm.collectionVariables.get('pedido_exito')]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin stock (5 x B, hay 3) -> SIN_STOCK",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_sin_stock}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_b}}\",\n      \"cantidad\": 5\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_sin_stock', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / SIN_STOCK', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('SIN_STOCK'); });",
+                  "pm.test('saga ABORTADA', () => pm.expect(p.saga.estado).to.eql('ABORTADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Usuario inexistente -> USUARIO_INEXISTENTE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_usr}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"usr_noexiste\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_usr', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / USUARIO_INEXISTENTE', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('USUARIO_INEXISTENTE'); });",
+                  "pm.test('saga ABORTADA', () => pm.expect(p.saga.estado).to.eql('ABORTADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pago rechazado -> compensa liberando stock",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_pago}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 3\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_RECHAZADA\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_pago', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / PAGO_RECHAZADO', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('PAGO_RECHAZADO'); });",
+                  "pm.test('saga COMPENSADA', () => pm.expect(p.saga.estado).to.eql('COMPENSADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);",
+                  "const pasos = pm.response.json().saga.pasos.map(s => s.paso + ':' + s.tipo + ':' + s.resultado);",
+                  "pm.test('compensacion LIBERAR_STOCK ejecutada', () => pm.expect(pasos.slice(-2)).to.eql(['PROCESAR_PAGO:ACCION:ERROR', 'LIBERAR_STOCK:COMPENSACION:OK']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Monto sobre el limite (2 x B = 18000) -> PAGO_RECHAZADO",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_limite}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_b}}\",\n      \"cantidad\": 2\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_limite', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / PAGO_RECHAZADO', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('PAGO_RECHAZADO'); });",
+                  "pm.test('saga COMPENSADA', () => pm.expect(p.saga.estado).to.eql('COMPENSADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Falla el ultimo paso -> reembolso + liberar stock",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_hist}}"
+              },
+              {
+                "key": "X-Simular-Fallo",
+                "value": "HISTORIAL"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "description": "X-Simular-Fallo: HISTORIAL fuerza el fallo del paso REGISTRAR_HISTORIAL para ver la compensacion en cascada (orden inverso).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_DEBITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_hist', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / FALLO_HISTORIAL', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('FALLO_HISTORIAL'); });",
+                  "pm.test('saga COMPENSADA', () => pm.expect(p.saga.estado).to.eql('COMPENSADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);",
+                  "pm.test('pago REEMBOLSADO', () => pm.expect(pm.response.json().pago.estado_pago).to.eql('REEMBOLSADO'));",
+                  "const pasos = pm.response.json().saga.pasos.map(s => s.paso + ':' + s.tipo + ':' + s.resultado);",
+                  "pm.test('compensaciones en orden inverso (LIFO)', () => pm.expect(pasos.slice(-3)).to.eql([",
+                  "  'REGISTRAR_HISTORIAL:ACCION:ERROR', 'REEMBOLSAR_PAGO:COMPENSACION:OK', 'LIBERAR_STOCK:COMPENSACION:OK']));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Pasarela de pago no responde -> PAGO_NO_DISPONIBLE",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_timeout}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_TIMEOUT\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_timeout', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / PAGO_NO_DISPONIBLE', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('PAGO_NO_DISPONIBLE'); });",
+                  "pm.test('saga COMPENSADA', () => pm.expect(p.saga.estado).to.eql('COMPENSADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Datos invalidos -> DATOS_INVALIDOS",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{key_datos}}"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"items\": [\n    {\n      \"producto_id\": \"\",\n      \"cantidad\": 0\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"BITCOIN\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('key_datos', 'pm-' + pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('422 pedido rechazado', () => pm.response.to.have.status(422));",
+                  "const p = pm.response.json();",
+                  "pm.test('estado RECHAZADO / DATOS_INVALIDOS', () => { pm.expect(p.estado).to.eql('RECHAZADO'); pm.expect(p.codigo_rechazo).to.eql('DATOS_INVALIDOS'); });",
+                  "pm.test('saga ABORTADA', () => pm.expect(p.saga.estado).to.eql('ABORTADA'));",
+                  "pm.test('motivo informado', () => pm.expect(p.motivo_rechazo).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Sin Idempotency-Key -> 400",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"usuario_id\": \"{{usuario_id}}\",\n  \"items\": [\n    {\n      \"producto_id\": \"{{producto_a}}\",\n      \"cantidad\": 1\n    }\n  ],\n  \"pago\": {\n    \"metodo\": \"TARJETA_CREDITO\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto A -> stock 8 (todo compensado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_a}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_a}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 8', () => pm.expect(pm.response.json().stock).to.eql(8));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET producto B -> stock 3 (todo compensado)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{catalogo_url}}/api/productos/{{producto_b}}",
+              "host": [
+                "{{catalogo_url}}"
+              ],
+              "path": [
+                "api",
+                "productos",
+                "{{producto_b}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('200', () => pm.response.to.have.status(200));",
+                  "pm.test('stock = 3', () => pm.expect(pm.response.json().stock).to.eql(3));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET usuario -> historial solo con el pedido confirmado",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{usuarios_url}}/api/usuarios/{{usuario_id}}",
+              "host": [
+                "{{usuarios_url}}"
+              ],
+              "path": [
+                "api",
+                "usuarios",
+                "{{usuario_id}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "setTimeout(() => {}, 400);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('un solo pedido en el historial', () => pm.expect(pm.response.json().historial_compras.map(h => h.pedido_id)).to.eql([pm.collectionVariables.get('pedido_exito')]));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET pedido inexistente -> 404",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{pedidos_url}}/api/pedidos/ord_noexiste",
+              "host": [
+                "{{pedidos_url}}"
+              ],
+              "path": [
+                "api",
+                "pedidos",
+                "ord_noexiste"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('404', () => pm.response.to.have.status(404));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "usuarios_url",
+      "value": "http://localhost:8081"
+    },
+    {
+      "key": "catalogo_url",
+      "value": "http://localhost:8082"
+    },
+    {
+      "key": "pedidos_url",
+      "value": "http://localhost:8083"
+    }
+  ]
+}

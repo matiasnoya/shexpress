@@ -1,5 +1,8 @@
 package com.shopexpress.pedidos.web;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.shopexpress.pedidos.dto.Dtos.CrearPedidoRequest;
 import com.shopexpress.pedidos.error.Errores;
 import com.shopexpress.pedidos.modelo.Pedido;
@@ -18,6 +21,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@Tag(name = "Pedidos", description = "SAGA orquestada + Chain of Responsibility")
 @RequestMapping("/api/pedidos")
 public class PedidoController {
 
@@ -36,8 +40,11 @@ public class PedidoController {
      *       el pedido original sin volver a cobrar ni reservar.</li>
      * </ul>
      */
+    @Operation(summary = "Crea un pedido (inicia la SAGA)", description = "201 CONFIRMADO, 422 RECHAZADO (ver codigo_rechazo y saga.pasos), 200 si la Idempotency-Key ya se uso. Metodos de pago: TARJETA_CREDITO, TARJETA_DEBITO, TRANSFERENCIA; para probar fallos: TARJETA_RECHAZADA, TARJETA_TIMEOUT o header X-Simular-Fallo: HISTORIAL.")
     @PostMapping
-    public ResponseEntity<Pedido> crear(@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+    public ResponseEntity<Pedido> crear(@Parameter(required = true, description = "Clave unica por intento de compra; repetirla devuelve el mismo pedido", example = "compra-123")
+                                        @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+                                        @Parameter(description = "HISTORIAL fuerza el fallo del ultimo paso para ver las compensaciones")
                                         @RequestHeader(value = "X-Simular-Fallo", required = false) String simularFallo,
                                         @RequestBody CrearPedidoRequest req) {
         if (idempotencyKey == null || idempotencyKey.isBlank() || idempotencyKey.length() > 100) {
@@ -54,6 +61,7 @@ public class PedidoController {
         return ResponseEntity.unprocessableContent().body(p);
     }
 
+    @Operation(summary = "Obtiene un pedido con el log de su SAGA", description = "Lectura en el primario (consistencia fuerte).")
     @GetMapping("/{id}")
     public Pedido obtener(@PathVariable String id) {
         return orquestador.obtener(id);

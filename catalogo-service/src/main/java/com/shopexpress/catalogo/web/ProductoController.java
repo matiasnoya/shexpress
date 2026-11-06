@@ -1,5 +1,7 @@
 package com.shopexpress.catalogo.web;
 
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import com.shopexpress.catalogo.dto.Dtos.CrearProductoRequest;
 import com.shopexpress.catalogo.modelo.Producto;
 import com.shopexpress.catalogo.servicio.ProductoService;
@@ -14,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
+@Tag(name = "Productos", description = "Catalogo de productos")
 @RequestMapping("/api/productos")
 public class ProductoController {
 
@@ -23,6 +26,7 @@ public class ProductoController {
         this.servicio = servicio;
     }
 
+    @Operation(summary = "Crea un producto", description = "La categoria queda embebida en el producto (slug + nombre).")
     @PostMapping
     public ResponseEntity<Producto> crear(@Valid @RequestBody CrearProductoRequest req) {
         Producto p = servicio.crear(req);
@@ -30,6 +34,7 @@ public class ProductoController {
     }
 
     /** Informacion del producto y su stock disponible (lectura rapida, consistencia eventual). */
+    @Operation(summary = "Obtiene un producto y su stock", description = "Lectura AP: Redis (TTL 30s) y secundario de MongoDB; el stock puede tener segundos de atraso.")
     @GetMapping("/{id}")
     public Producto obtener(@PathVariable String id) {
         return servicio.obtener(id);
