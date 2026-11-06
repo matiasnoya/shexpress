@@ -6,3 +6,8 @@ target/
 .vscode/
 .DS_Store
 .env
+
+# Archivos locales del workspace de Postman (la coleccion versionada es postman/ShopExpress.postman_collection.json)
+.postman/
+postman/collections/
+postman/globals/
