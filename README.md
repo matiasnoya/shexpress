@@ -588,6 +588,7 @@ shexpress/
 ├── README.md
 ├── docker-compose.yml                 # mongo1..3 (rs0) + redis + 3 servicios
 ├── docs/decisiones.md                 # registro de decisiones previas a implementar
+├── docs/presentacion/                 # presentación HTML con animaciones (abrir en el navegador)
 ├── postman/ShopExpress.postman_collection.json
 ├── scripts/
 │   ├── prueba-saga.sh                 # 11 escenarios de la SAGA
