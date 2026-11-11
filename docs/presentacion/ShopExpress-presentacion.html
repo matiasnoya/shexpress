@@ -62,6 +62,10 @@ th{color:var(--muted);font-weight:600;font-size:15px;text-transform:uppercase;le
 #footer{position:absolute;left:0;right:0;bottom:0;height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;color:var(--dim);font-size:14px;z-index:20}
 #progress{position:absolute;left:0;bottom:0;height:3px;background:linear-gradient(90deg,var(--cyan),var(--violet));transition:width .4s}
 #footer .keys span{border:1px solid var(--line);border-radius:5px;padding:1px 6px;margin:0 2px;color:var(--muted)}
+.dg text{font-family:var(--sans)}
+.dg .lbl{font-size:13.5px;fill:#56627d;paint-order:stroke;stroke:#fff;stroke-width:6px;stroke-linejoin:round}
+.dg .edge-s{stroke:#64748b;stroke-width:2;fill:none}
+.dg .edge-d{stroke:#64748b;stroke-width:2;fill:none;stroke-dasharray:7 6}
 #notes{position:absolute;left:80px;right:80px;bottom:52px;background:#fffffff2;box-shadow:0 8px 30px #0f172a22;border:1px solid var(--line);border-radius:12px;padding:14px 18px;font-size:18px;color:#1e293b;display:none;z-index:30;line-height:1.45}
 #notes.on{display:block}
 #notes b{color:var(--comp)}
@@ -409,6 +413,15 @@ a{color:var(--cyan)}
   <aside class="notes"><b>~30 s.</b> Destacar los 3 pasos con efecto y sus compensaciones.</aside>
 </section>
 
+<!-- =============================== DIAGRAMA SAGA =============================== -->
+<section class="slide" data-title="Diagrama SAGA">
+  <div class="tag">SAGA · diagrama de flujo</div>
+  <h2 style="margin-bottom:6px">Flujo de la SAGA: pasos, fallos y compensaciones</h2>
+  <svg id="dgSaga" class="dg" viewBox="0 0 1500 640" width="1440" height="614"></svg>
+  <aside class="notes"><b>~40 s.</b> Arriba el camino feliz (pasos 1 a 8). Las flechas hacia abajo son los fallos: si nada cambió todavía, la saga se ABORTA; si ya hubo efectos, se compensan en orden inverso (reembolsar y después liberar stock). Si una compensación falla, el job la reintenta cada 30 s.</aside>
+</section>
+
+
 <!-- =============================== 11. CHAIN =============================== -->
 <section class="slide" data-title="Chain of Responsibility">
   <div class="tag">Lógica de negocio · Chain of Responsibility</div>
@@ -446,6 +459,15 @@ a{color:var(--cyan)}
   </div>
   <aside class="notes"><b>~1 min.</b> Reproducir sin fallo y luego con falla en ProcesadorDePago: solo se compensa lo que ya se hizo (liberar stock). Los eslabones con etiqueta "efecto" son los pasos de la SAGA.</aside>
 </section>
+
+<!-- =============================== DIAGRAMA CoR =============================== -->
+<section class="slide" data-title="Diagrama Chain of Responsibility">
+  <div class="tag">Chain of Responsibility · diagrama</div>
+  <h2 style="margin-bottom:6px">Secuencia de manejadores en Pedidos y Pagos</h2>
+  <svg id="dgCor" class="dg" viewBox="0 0 1500 600" width="1440" height="576"></svg>
+  <aside class="notes"><b>~30 s.</b> El ContextoPedido recorre los 7 manejadores; cada uno delega en el siguiente si sale bien. Los tres en ámbar tocan otro servicio y apilan su compensación. Cualquier fallo lanza RechazoPedidoException: el orquestador desapila y compensa.</aside>
+</section>
+
 
 <!-- =============================== 12. FALLAS DE RED =============================== -->
 <section class="slide" data-title="Fallas de red">
@@ -1134,6 +1156,110 @@ onEnter[idx('SAGA orquestada')] = (replay)=>{ sagaR.stop(); buildSaga(); if(repl
 onEnter[idx('Chain of Responsibility')] = (replay)=>{ corR.stop(); buildChain(); document.getElementById('corStack').innerHTML=''; if(replay) corRun(); };
 onEnter[idx('Fallas de red')] = ()=>{ tlR.stop(); document.querySelectorAll('#tl .st').forEach(s=>s.classList.remove('on')); };
 onEnter[idx('Despliegue')] = (replay)=>{ dkR.stop(); buildDock(); if(replay) dockRun(); };
+
+
+/* ============================ Diagramas estáticos (README §4.2 y §5) ============================ */
+const DG = {
+  main:{fill:'#ffffff',stroke:'#0284c7'}, ok:{fill:'#dcfce7',stroke:'#059669'}, ko:{fill:'#ffe4e6',stroke:'#e11d48'},
+  comp:{fill:'#fef3c7',stroke:'#d97706'}, ctx:{fill:'#f1f5f9',stroke:'#64748b'}, orq:{fill:'#fce7f3',stroke:'#db2777'}
+};
+function dgNode(svg, n){
+  const st = DG[n.kind||'main'], g = el('g',{},svg), w=n.w, h=n.h, x=n.x-w/2, y=n.y-h/2;
+  if(n.shape==='diamond') el('polygon',{points:`${n.x},${y} ${x+w},${n.y} ${n.x},${y+h} ${x},${n.y}`,fill:st.fill,stroke:st.stroke,'stroke-width':2},g);
+  else if(n.shape==='hex'){ const k=22; el('polygon',{points:`${x+k},${y} ${x+w-k},${y} ${x+w},${n.y} ${x+w-k},${y+h} ${x+k},${y+h} ${x},${n.y}`,fill:st.fill,stroke:st.stroke,'stroke-width':2},g); }
+  else el('rect',{x,y,width:w,height:h,rx:n.shape==='pill'?h/2:12,fill:st.fill,stroke:st.stroke,'stroke-width':2},g);
+  const lines = n.lines, lh = n.lh||19, y0 = n.y - (lines.length-1)*lh/2 + 5;
+  lines.forEach((l,k)=>{
+    const o = typeof l==='string' ? {t:l} : l;
+    const t = el('text',{x:n.x,y:y0+k*lh,'text-anchor':'middle','font-size':o.s||(k===0?16:14),'font-weight':o.b??(k===0?700:400),
+      fill:o.c||(k===0?'#0f172a':'#56627d'),'font-style':o.i?'italic':'normal'},g);
+    t.textContent=o.t;
+  });
+}
+function dgEdge(svg, pts, {label, at, dashed, anchor='middle'}={}){
+  const d = 'M'+pts.map(p=>p.join(',')).join(' L');
+  el('path',{d,class:dashed?'edge-d':'edge-s','marker-end':'url(#'+svg.id+'Arr)'},svg);
+  if(label){ const t=el('text',{x:at[0],y:at[1],class:'lbl','text-anchor':anchor},svg); t.textContent=label; }
+}
+function dgSetup(svg){
+  svg.innerHTML='';
+  const defs=el('defs',{},svg), m=el('marker',{id:svg.id+'Arr',viewBox:'0 0 10 10',refX:9,refY:5,markerWidth:7,markerHeight:7,orient:'auto-start-reverse'},defs);
+  el('path',{d:'M0,0 L10,5 L0,10 z',fill:'#64748b'},m);
+}
+function dgLegend(svg, x, y, items){
+  items.forEach(([kind,txt],k)=>{ const st=DG[kind]; const yy=y+k*26;
+    el('rect',{x,y:yy-13,width:22,height:16,rx:4,fill:st.fill,stroke:st.stroke,'stroke-width':2},svg);
+    const t=el('text',{x:x+32,y:yy,'font-size':14.5,fill:'#334155'},svg); t.textContent=txt; });
+}
+function drawSagaDiagram(){
+  const svg=document.getElementById('dgSaga'); dgSetup(svg);
+  const W=124, H=74, Y=100, X=[72,212,356,496,636,776,916,1056,1196,1336];
+  // aristas primero (quedan debajo de los nodos)
+  dgEdge(svg,[[131,Y],[146,Y]]);
+  dgEdge(svg,[[278,Y],[293,Y]],{label:'no',at:[284,Y-16]});
+  for(let k=2;k<9;k++) dgEdge(svg,[[X[k]+W/2,Y],[X[k+1]-W/2,Y]]);
+  dgEdge(svg,[[212,Y+48],[212,222]],{label:'sí',at:[226,190],anchor:'start'});
+  dgEdge(svg,[[496,Y+H/2],[500,220]],{label:'error',at:[470,182],anchor:'end'});
+  dgEdge(svg,[[636,Y+H/2],[610,220]],{label:'no existe / caído',at:[600,168],anchor:'end'});
+  dgEdge(svg,[[760,Y+H/2],[686,220]],{label:'sin stock / 404 / sin conexión',at:[700,200],anchor:'start'});
+  dgEdge(svg,[[792,Y+H/2],[920,222]],{label:'timeout de lectura',at:[862,168],anchor:'start',dashed:true});
+  dgEdge(svg,[[1056,Y+H/2],[1012,222]],{label:'rechazado / timeout / límite',at:[1046,196],anchor:'start'});
+  dgEdge(svg,[[1196,Y+H/2],[1196,222]],{label:'error',at:[1206,184],anchor:'start'});
+  dgEdge(svg,[[1121,255],[1053,255]]);
+  dgEdge(svg,[[1350,Y+H/2],[1384,222]]);
+  dgEdge(svg,[[976,288],[976,350]]);
+  dgEdge(svg,[[934,428],[872,512]],{label:'sí',at:[890,462],anchor:'end'});
+  dgEdge(svg,[[1018,428],[1100,512]],{label:'no',at:[1080,462],anchor:'start'});
+  dgEdge(svg,[[1018,580],[938,580]],{label:'job cada 30 s reintenta',at:[978,610],dashed:true});
+  // nodos
+  dgNode(svg,{x:72,y:Y,w:118,h:H,shape:'pill',kind:'ctx',lines:[{t:'POST',s:15},{t:'/api/pedidos',s:14,b:600,c:'#0f172a'}]});
+  dgNode(svg,{x:212,y:Y,w:132,h:98,shape:'diamond',lines:[{t:'¿Idempotency-',s:13.5,b:700},{t:'Key usada?',s:13.5,b:700,c:'#0f172a'}],lh:17});
+  const pasos=[['1 · Crear pedido','PENDIENTE'],['2 · Validar','datos'],['3 · Validar','usuario'],['4 · Reservar','stock'],['5 · Calcular','total'],['6 · Procesar','pago'],['7 · Registrar','historial'],['8 · Confirmar','pedido']];
+  pasos.forEach((p,k)=>dgNode(svg,{x:X[k+2],y:Y,w:W,h:H,lines:[{t:p[0],s:14},{t:p[1],s:14.5,b:700,c:'#0f172a'}]}));
+  dgNode(svg,{x:212,y:255,w:156,h:60,kind:'ok',lines:['200',{t:'pedido original',c:'#065f46'}]});
+  dgNode(svg,{x:566,y:258,w:250,h:72,kind:'ko',lines:['422 · RECHAZADO',{t:'saga ABORTADA',b:700,c:'#9f1239'},{t:'nada que compensar',s:13}],lh:18});
+  dgNode(svg,{x:976,y:255,w:150,h:66,kind:'comp',lines:['Compensar 4',{t:'liberar stock',c:'#92400e'}]});
+  dgNode(svg,{x:1196,y:255,w:150,h:66,kind:'comp',lines:['Compensar 6',{t:'reembolsar pago',c:'#92400e'}]});
+  dgNode(svg,{x:1390,y:255,w:150,h:66,kind:'ok',lines:['201 CONFIRMADO',{t:'saga COMPLETADA',c:'#065f46'}]});
+  dgNode(svg,{x:976,y:390,w:190,h:96,shape:'diamond',lines:[{t:'¿todas las',s:14,b:700},{t:'compensaciones OK?',s:13.5,b:700,c:'#0f172a'}],lh:17});
+  dgNode(svg,{x:830,y:545,w:210,h:66,kind:'ko',lines:['422 · RECHAZADO',{t:'saga COMPENSADA',b:700,c:'#9f1239'}]});
+  dgNode(svg,{x:1150,y:545,w:250,h:66,kind:'ko',lines:['422 · RECHAZADO',{t:'COMPENSACION_FALLIDA',b:700,c:'#9f1239'}]});
+  // leyenda y nota LIFO
+  dgLegend(svg,40,430,[['main','paso de la saga'],['comp','compensación (orden inverso, LIFO)'],['ok','resultado exitoso'],['ko','pedido rechazado']]);
+  const n=el('text',{x:40,y:560,'font-size':15,fill:'#334155'},svg); n.textContent='Si falla el paso 7: primero reembolsar (6),';
+  const n2=el('text',{x:40,y:582,'font-size':15,fill:'#334155'},svg); n2.textContent='después liberar stock (4).';
+}
+function drawCorDiagram(){
+  const svg=document.getElementById('dgCor'); dgSetup(svg);
+  const Y=250, W=186, H=124, X=[120,330,540,750,960,1170,1380];
+  // aristas
+  dgEdge(svg,[[200,108],[200,140],[120,140],[120,Y-H/2]]);
+  for(let k=0;k<6;k++) dgEdge(svg,[[X[k]+W/2,Y],[X[k+1]-W/2,Y]],{label:'OK',at:[(X[k]+X[k+1])/2,Y-10]});
+  dgEdge(svg,[[1380,Y-H/2],[1380,140],[1300,140],[1300,104]]);
+  for(let k=0;k<6;k++) el('path',{d:`M${X[k]},${Y+H/2} L${X[k]},392`,class:'edge-d'},svg);
+  el('path',{d:'M120,392 L1170,392',class:'edge-d'},svg);
+  dgEdge(svg,[[645,392],[645,446]],{dashed:true});
+  const lb=el('text',{x:660,y:425,class:'lbl','text-anchor':'start'},svg); lb.textContent='RechazoPedidoException';
+  dgEdge(svg,[[825,490],[948,490]]);
+  // nodos
+  dgNode(svg,{x:200,y:72,w:330,h:72,shape:'pill',kind:'ctx',lines:['ContextoPedido',{t:'request + pedido + pila de compensaciones'}]});
+  dgNode(svg,{x:1300,y:72,w:230,h:62,shape:'pill',kind:'ok',lines:['201 CONFIRMADO']});
+  const hs=[
+    ['ValidadorDeDatos',['forma, cantidades,','método de pago'],null],
+    ['ValidadorDeUsuario',['GET usuario'],null],
+    ['ValidadorDeStock',['reserva atómica'],'⤷ apila: liberar stock'],
+    ['CalculadorDeTotal',['precio del catálogo'],null],
+    ['ProcesadorDePago',['pasarela'],'⤷ apila: reembolsar'],
+    ['RegistradorDeHistorial',['POST historial'],'⤷ apila: quitar historial'],
+    ['ConfirmadorDePedido',['CONFIRMADO'],null],
+  ];
+  hs.forEach(([t,d,fx],k)=>dgNode(svg,{x:X[k],y:Y,w:W,h:H,kind:fx?'comp':'main',
+    lines:[{t,s:t.length>19?14.5:15.5},...d.map(x=>({t:x,i:true,s:14})),...(fx?[{t:fx,s:13.5,b:700,c:'#b45309'}]:[])],lh:21}));
+  dgNode(svg,{x:645,y:490,w:360,h:86,shape:'hex',kind:'orq',lines:['OrquestadorSagaPedido',{t:'desapila y ejecuta las compensaciones (LIFO)'}]});
+  dgNode(svg,{x:1060,y:490,w:220,h:62,shape:'pill',kind:'ko',lines:['422 RECHAZADO']});
+  dgLegend(svg,1210,410,[['main','manejador sin efectos externos'],['comp','toca otro servicio → apila compensación'],['orq','orquestador de la SAGA']]);
+}
+drawSagaDiagram(); drawCorDiagram();
 
 velTxt();
 go(Math.max(0, (parseInt(location.hash.slice(1))||1)-1));
